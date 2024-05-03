@@ -3,7 +3,6 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
 import numpy as np
-import datetime
 import os
 
 class DeepQNetworkConv(nn.Module):
@@ -19,7 +18,7 @@ class DeepQNetworkConv(nn.Module):
         self.pool = nn.MaxPool2d(kernel_size=2, stride=2)
         
         # linear layer 
-        self.fc1 = nn.Linear(16 * 16 * 16, 32)
+        self.fc1 = nn.Linear(16 * 5 * 5, 32)
         self.fc2 = nn.Linear(32, 32)
         self.fc3 = nn.Linear(32, n_actions)
         
@@ -38,7 +37,7 @@ class DeepQNetworkConv(nn.Module):
         actions = self.fc3(x)
         return actions
 
-class Agent():
+class AgentConv():
     def __init__(self, gamma, epsilon, lr, input_dims, batch_size, n_actions, max_mem_size=int(1e4), eps_end=0.01, eps_dec=5e-4):
         self.gamma = gamma
         self.epsilon = epsilon
@@ -53,8 +52,8 @@ class Agent():
         self.Q_val = DeepQNetworkConv(self.lr, n_actions=n_actions, input_dims=input_dims)
         
         # replay memory
-        self.state_memory = np.zeros((self.mem_size, input_dims), dtype=np.float32)
-        self.new_state_memory = np.zeros((self.mem_size, input_dims), dtype=np.float32)
+        self.state_memory = np.zeros((self.mem_size, *input_dims), dtype=np.float32)
+        self.new_state_memory = np.zeros((self.mem_size, *input_dims), dtype=np.float32)
         self.action_memory = np.zeros(self.mem_size, dtype=np.int32)
         self.reward_memory = np.zeros(self.mem_size, dtype=np.float32)
         self.terminal_memory = np.zeros(self.mem_size, dtype=np.bool8)
@@ -70,7 +69,7 @@ class Agent():
     
     def choose_action(self, observation):
         if np.random.random() > self.epsilon:
-            state = T.tensor(np.array(observation)).to(self.Q_val.device)
+            state = T.from_numpy(observation).float().unsqueeze(0).unsqueeze(0)
             actions = self.Q_val.forward(state)
             action = T.argmax(actions).item()
         else:
@@ -87,8 +86,8 @@ class Agent():
         batch = np.random.choice(max_mem, self.batch_size, replace=False)
         batch_index = np.arange(self.batch_size, dtype=np.int32)
         
-        state_batch = T.tensor(self.state_memory[batch]).to(self.Q_val.device)
-        new_state_batch = T.tensor(self.new_state_memory[batch]).to(self.Q_val.device)
+        state_batch = T.tensor(self.state_memory[batch]).unsqueeze(1).to(self.Q_val.device)
+        new_state_batch = T.tensor(self.new_state_memory[batch]).unsqueeze(1).to(self.Q_val.device)
         reward_batch = T.tensor(self.reward_memory[batch]).to(self.Q_val.device)
         terminal_batch = T.tensor(self.terminal_memory[batch]).to(self.Q_val.device)
         
@@ -96,7 +95,6 @@ class Agent():
         
         # get the Q value of sampled states and its corresponding action
         q_val = self.Q_val.forward(state_batch)[batch_index, action_batch]
-        
         
         q_next = self.Q_val.forward(new_state_batch)
         q_next[terminal_batch] = 0.0
