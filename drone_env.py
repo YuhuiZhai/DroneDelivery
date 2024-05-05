@@ -1,14 +1,16 @@
 import numpy as np
 import matplotlib.pyplot as plt
+from matplotlib import colors
 import seaborn as sb
 import torch as T
 import torch.nn as nn
 import torch.nn.functional as F
 
 class DroneEnv:
-    def __init__(self, grid_shape=(50, 50), k_att=1, k_str=10, k_rep=100,
-                 p0=6, ps=8, alpha=-20, W1=-10, W2=10, W3=-0.2, obs_range=5):
+    def __init__(self, grid_shape=(50, 50), k_att=5, k_str=15, k_rep=10,
+                 p0=3, ps=3, alpha=-60, beta=-1, W1=-100, W2=100, W3=-0.4, obs_range=5, manual=False):
         
+        self.manual = manual
         self.grid_shape = grid_shape
         self.k_att = k_att
         self.k_str = k_str
@@ -20,21 +22,21 @@ class DroneEnv:
         self.W2 = W2
         self.W3 = W3
         self.obs_range = obs_range
-        
+        self.beta = beta
         # observation region image as a state
-        self.observation_space_dim = (obs_range*2, obs_range*2)
+        self.observation_space_dim = (obs_range*2+1, obs_range*2+1)
         
         # actions: N, E, S, W, NE, NW, SE, SW, not move
-        self.action_space_dim = 8
+        self.action_space_dim = 4
         
         # 2d binary array showing whether a wall exists
         self.wall_space = np.zeros(self.grid_shape)
         
         self.action_vec = {
-            0: np.array([0, 1]),
-            1: np.array([1, 0]),
-            2: np.array([0, -1]),
-            3: np.array([-1, 0]), 
+            0: np.array([-1, 0]), 
+            1: np.array([0, 1]),
+            2: np.array([1, 0]),
+            3: np.array([0, -1]),
             4: np.array([1, 1]),
             5: np.array([1, -1]),
             6: np.array([1, -1]),
@@ -43,6 +45,9 @@ class DroneEnv:
         
         self.record = False
         self.trajectory = []
+        self.curr_state = None
+        self.record = []
+        self.visits = np.zeros(self.grid_shape)
         return 
 
     # create two points randomly distributed 
@@ -96,44 +101,115 @@ class DroneEnv:
     # create the final goal 
     def create_destination(self):
         w, _ = self.grid_shape
-        
-        point1, point2 = self.create_random_point(0, w-1, 0, w-1)
-        avg_point = (point1 + point2) / 2
-        avg_point[0] = int(avg_point[0])
-        avg_point[1] = int(avg_point[1])
-        self.destination = avg_point
-        return 
+        self.destination, _ = self.create_random_point(int((w-1)/2)+1, w-1, int((w-1)/2)+1, w-1)
+        return self.destination
     
     # create starting point
     def create_origin(self):
-        x, y = np.where(self.wall_space != 1)
-        rand_idx = np.random.randint(len(x)) 
-        self.origin = np.array([x[rand_idx], y[rand_idx]])
+        w, _ = self.grid_shape
+        self.origin, _ = self.create_random_point(0, int((w-1)/2), 0, int((w-1)/2))
+        assert np.any(self.origin != self.destination) 
+        return  
+    
+    def create_block(self, block_size, block_num):
+        w, _ = self.grid_shape
+        startings_points = np.random.randint(low=0, high=(w-block_size), size=(block_num, 2))
+        
+        for points in startings_points:
+            i, j = points
+            self.wall_space[i:i+block_size, j:j+block_size] = 1
+        return 
+    
+    def create_destination_manual(self):
+        self.destination = np.array([6, 2])
+        return
+    
+    def create_origin_manual(self):
+        self.origin = np.array([1, 5])
+        # self.origin = np.array([5, 9])
+        return
+    
+    def create_block_manual(self, block_size):
+        w, _ = self.grid_shape
+        startings_points = [(0, 0), (2, 3), (5, 7), (3, 4), (6, 3), (4, 2)]
+        
+        for points in startings_points:
+            i, j = points
+            self.wall_space[i:i+block_size, j:j+block_size] = 1
+        return 
+    
+    
+    def extend_wall(self):
+        w, _ = self.grid_shape
+        wall_extended = np.ones((w+self.obs_range*2, w+self.obs_range*2))
+        wall_extended[self.obs_range:w+self.obs_range, self.obs_range:w+self.obs_range] = self.wall_space
+        self.wall_space_extend = wall_extended
         return 
     
     def reset(self):
         w, _ = self.grid_shape
-        self.create_destination()
+        if self.manual:
+            self.create_destination_manual()
+        else:
+            self.create_destination()
         
         # partition the whole region into 4 zones by the point of final goal, and generate a wall in each zone
         x_goal, y_goal = self.destination
         wall_num = 1
-        delta = 3
-        cases = [(delta, x_goal-delta, delta, y_goal-delta), (delta, x_goal-delta, y_goal+delta, w-delta), (x_goal+delta, w-delta, delta, y_goal-delta), (x_goal+delta, w-delta, y_goal+delta, w-delta)]
-        for case in cases:
-            for i in range(wall_num):
-                point1, point2 = self.create_random_point(*case)
-                self.create_wall_I(point1, point2, width=2)
-
-        # starting from origin                
-        self.create_origin()
+        
+        self.wall_space = np.zeros(self.grid_shape)
+        self.visits = np.zeros(self.grid_shape)
+        self.trajectory = []
+        
+        # starting from origin   
+        if self.manual:    
+            self.create_origin_manual()    
+        else:     
+            self.create_origin()     
+        
+        if w <= 7:
+            delta = 1
+            case = (delta, w-delta, delta, w-delta)
+            point1, point2 = self.create_random_point(*case)
+            self.create_wall_I(point1, point2, width=1)
+        else:
+            delta = 1
+            # cases = [(delta, w-delta, delta, w-delta), (delta, w-delta, int(w/2)-delta, int(w/2)+delta), (int(w/2)-delta, int(w/2)+delta, delta, w-delta)]
+            
+            # for case in cases:
+            #     point1, point2 = self.create_random_point(*case)
+            #     self.create_wall_I(point1, point2)
+            
+            if self.manual:
+                self.create_block_manual(block_size=2)
+            else:
+                block_size = np.random.randint(low=2, high=4)
+                self.create_block(block_num=6, block_size=block_size)
+                self.wall_space[0, :] = 0
+                self.wall_space[w-1, :] = 0
+                self.wall_space[:, 0] = 0
+                self.wall_space[:, w-1] = 0
+                origin_axis, destination_axis = np.random.randint(low=0, high=1, size=2)
+                if origin_axis == 0:
+                    self.wall_space[0:self.origin[0], self.origin[1]] = 0
+                else:
+                    self.wall_space[self.origin[0], 0:self.origin[1]] = 0
+                if destination_axis == 0:
+                    self.wall_space[0:self.destination[0], self.destination[1]] = 0
+                else:
+                    self.wall_space[self.destination[0], 0:self.destination[1]] = 0
+                
+        self.wall_space[*self.destination] = 0
+        
         self.create_potential_field()
         i, j = self.origin
-        initial_state = self.U_extended[i:i+2*self.obs_range, j:j+2*self.obs_range]
-        
+        initial_state = self.U_extended[i:i+2*self.obs_range+1, j:j+2*self.obs_range+1]
+        self.curr_state = initial_state
+        self.extend_wall()
         if self.record:
             self.trajectory = [self.origin]
-             
+        assert np.any(self.origin != self.destination)
+        assert self.wall_space[*self.destination] != 1
         return initial_state
     
     def create_potential_field(self, show=False):
@@ -146,20 +222,28 @@ class DroneEnv:
         dist = ((X - d[0])**2 + (Y - d[1])**2)**(1/2)
         
         dist_obs = ((wall_x[np.newaxis, :] - X[:, np.newaxis])**2+(wall_y[np.newaxis, :] - Y[:, np.newaxis])**2)**(1/2)
-        dist_min = 0.3
+        dist_min = 0.35
         dist_obs[dist_obs == 0] = dist_min
         U_str = -self.k_str/2*(np.maximum(self.ps - dist, 0))**2 
         U_att = self.k_att*(dist)**2
-        U_rep = self.k_rep/2*(np.maximum(1/dist_obs - 1/self.p0, 0))**2
-        
-        U_rep = np.sum(U_rep, axis=1)
+        if len(np.where(self.wall_space == 1)[0]) == 0:
+            U_rep = np.zeros(self.grid_shape)
+        else:
+            U_rep = self.k_rep/2*(np.maximum(1/dist_obs - 1/self.p0, 0))**2
+            U_rep = np.sum(U_rep, axis=1)
         U_str = np.reshape(U_str, self.grid_shape).T
         U_att = np.reshape(U_att, self.grid_shape).T
         U_rep = np.reshape(U_rep, self.grid_shape).T
         
-        U = U_att + U_str + U_rep 
+        U = U_att + U_str 
         U = (U - np.min(U)) / (np.max(U) - np.min(U))
+        U[wall_x, wall_y] = 1
         self.U = U
+        self.U_extended = np.ones((w+2*self.obs_range, w+2*self.obs_range))
+        self.U_extended[self.obs_range:w+self.obs_range, self.obs_range:w+self.obs_range] = self.U
+        self.prev_q = self.U[*self.origin]
+        
+        
         if show:
             plt.clf()
             sb.heatmap(self.wall_space)
@@ -176,28 +260,38 @@ class DroneEnv:
             plt.clf()
             sb.heatmap(U)
             plt.savefig('field.png')
-        self.U_extended = np.ones((w+2*self.obs_range, w+2*self.obs_range))
-        self.U_extended[self.obs_range:w+self.obs_range, self.obs_range:w+self.obs_range] = self.U
-        self.prev_q = self.U[*self.origin]
+            plt.clf()
+            sb.heatmap(self.U_extended)
+            plt.savefig('field_extended.png')
         return 
     
     def step(self, action):
         w, _ = self.grid_shape
+        
         temp = self.origin + self.action_vec[action]
-        # print(action, self.action_vec[action], self.action_vec)
-        i, j = temp
-        self.origin = np.array([min(max(i, 0), w-1), min(max(j, 0), w-1)])
+        hit = self.wall_space_extend[temp[0]+self.obs_range, temp[1]+self.obs_range] == 1
+        if not hit:
+            self.origin = temp
         i, j = self.origin
-        new_state = self.U_extended[i:i+2*self.obs_range, j:j+2*self.obs_range]
-        done = np.all(self.origin == self.destination)
-        W1 = self.W1 if self.wall_space[i, j] == 1 else 0
-        W2 = self.W2 if done else 0
+        self.visits[i, j] += 1
+        new_state = self.U_extended[i:i+2*self.obs_range+1, j:j+2*self.obs_range+1]
+        goal = np.all(self.origin == self.destination)
+        done = goal
+        # penalty of hitting wall
+        W1 = self.W1 if hit else 0
+        W2 = self.W2 if goal else 0
         W3 = self.W3
         W4 = self.alpha * (self.U[i, j] - self.prev_q)
+        # W4 = self.alpha * W4 if W4 < 0 else  self.alpha * W4
+        reward = W1 + W2 + W3 + W4 
+        # reward = W1 + W2 + W3
+        self.curr_state = new_state
         self.prev_q = self.U[i, j]
-        reward = W1 + W2 + W3 + W4
         if self.record:
             self.trajectory.append(self.origin)
+        
+        # normalize the observation state
+        # new_state = (new_state - np.min(new_state)) / (np.max(new_state) - np.min(new_state))
         return new_state, reward, done, None
 
     def show(self):
@@ -206,4 +300,23 @@ class DroneEnv:
         plt.plot(traj[:, 0], traj[:, 1], 'r--')
         plt.show()
         
+    def plot(self):
+        cmap = colors.ListedColormap(['white', 'black', 'blue', 'red'])
+        temp = np.copy(self.wall_space)
+        temp[*self.origin] = 2
+        temp[int(self.destination[0]), int(self.destination[1])] = 3
+        print(temp)
+        fig, ax = plt.subplots(1, 2, figsize=(8, 4))
+        bounds = [0, 0.9,1.5, 2.5, 3.5]
+        norm = colors.BoundaryNorm(bounds, cmap.N)
+        ax[0].imshow(temp, cmap=cmap, norm=norm)
+        ax[0].grid(which='major', axis='both', linestyle='-', color='k', linewidth=1)
+        ax[0].set_xticks(np.arange(0.5, temp.shape[1], 1))  # correct grid sizes
+        ax[0].set_yticks(np.arange(0.5, temp.shape[0], 1))
+        print(self.curr_state)
+        ax[1].imshow(self.curr_state, cmap='hot', interpolation='nearest')
+        plt.show()
+        print('\n\n')  
+        return 
+    
     

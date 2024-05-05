@@ -16,9 +16,11 @@ class DeepQNetworkConv(nn.Module):
         self.conv1 = nn.Conv2d(1, 16, kernel_size=(3, 3), padding=1)
         self.conv2 = nn.Conv2d(16, 16, kernel_size=(3, 3), padding=1)
         self.pool = nn.MaxPool2d(kernel_size=2, stride=2)
+        # output is 16 x k/2 x k/2
         
         # linear layer 
-        self.fc1 = nn.Linear(16 * 5 * 5, 32)
+        obs, obs = input_dims
+        self.fc1 = nn.Linear(16 * int(obs/2) * int(obs/2), 32)
         self.fc2 = nn.Linear(32, 32)
         self.fc3 = nn.Linear(32, n_actions)
         
@@ -67,13 +69,21 @@ class AgentConv():
         self.terminal_memory[index] = done
         self.mem_cntr += 1
     
-    def choose_action(self, observation):
-        if np.random.random() > self.epsilon:
+    def choose_action(self, observation, restricted_action_space=None, epsilon_zero=False):
+        if not epsilon_zero:
+            if np.random.random() > self.epsilon:
+                state = T.from_numpy(observation).float().unsqueeze(0).unsqueeze(0)
+                actions = self.Q_val.forward(state)
+                action = T.argmax(actions).item()
+            else:
+                if restricted_action_space != None:
+                    action = np.random.choice(restricted_action_space)
+                else:
+                    action = np.random.choice(self.action_space)
+        else:
             state = T.from_numpy(observation).float().unsqueeze(0).unsqueeze(0)
             actions = self.Q_val.forward(state)
             action = T.argmax(actions).item()
-        else:
-            action = np.random.choice(self.action_space)
         return action
     
     def learn(self):
