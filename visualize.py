@@ -3,7 +3,7 @@ import matplotlib.pyplot as plt
 from matplotlib import colors
 import seaborn as sb
 import gym 
-from dqn_conv import *
+from dqn_conv_BHPF import *
 from drone_env import *
 from tqdm import tqdm
 action_label = {
