@@ -36,11 +36,11 @@ if training:
         # print(f'epsilon {agent.epsilon}, score: {score}')
         scores.append(score)
         avg_score = np.mean(scores[-100:])
-        avg_scores.append(avg_scores)
+        avg_scores.append(avg_score)
         if i % 100 == 0:
             print(f'Episode {i}: Done; Epsilon {agent.epsilon} Average score {avg_score}')
             agent.save_checkpoint(iteration=i)
-    pd.DataFrame(np.array(avg_scores)).to_excel('score.xlsx')
+    pd.DataFrame(np.array(avg_scores)[:, np.newaxis]).to_excel('score.xlsx')
 
 else:
     env.record = True

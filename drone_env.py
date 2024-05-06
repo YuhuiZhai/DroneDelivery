@@ -6,9 +6,10 @@ import torch as T
 import torch.nn as nn
 import torch.nn.functional as F
 
+
 class DroneEnv:
-    def __init__(self, grid_shape=(50, 50), k_att=5, k_str=15, k_rep=10,
-                 p0=3, ps=3, alpha=-60, beta=-1, W1=-100, W2=100, W3=-0.4, obs_range=5, manual=False):
+    def __init__(self, grid_shape=(50, 50), k_att=5, k_str=60, k_rep=60,
+                 p0=3, ps=3, alpha=-60, beta=-1, W1=-100, W2=100, W3=-1, obs_range=5, manual=False):
         
         self.manual = manual
         self.grid_shape = grid_shape
@@ -184,7 +185,7 @@ class DroneEnv:
                 self.create_block_manual(block_size=2)
             else:
                 block_size = np.random.randint(low=2, high=4)
-                self.create_block(block_num=6, block_size=block_size)
+                self.create_block(block_num=10, block_size=block_size)
                 self.wall_space[0, :] = 0
                 self.wall_space[w-1, :] = 0
                 self.wall_space[:, 0] = 0
@@ -245,24 +246,33 @@ class DroneEnv:
         
         
         if show:
-            plt.clf()
-            sb.heatmap(self.wall_space)
-            plt.savefig('wall.png')
-            plt.clf()
-            sb.heatmap(U_str)
-            plt.savefig('str.png')
-            plt.clf()
-            sb.heatmap(U_att)
-            plt.savefig('att.png')
-            plt.clf()
-            sb.heatmap(U_rep)
-            plt.savefig('rep.png')
-            plt.clf()
-            sb.heatmap(U)
+            fig, axs = plt.subplots(2, 3, figsize=(12, 8))
+            cmap = colors.ListedColormap(['white', 'black', 'blue', 'red'])
+            temp = np.copy(self.wall_space)
+            temp[*self.origin] = 2
+            temp[int(self.destination[0]), int(self.destination[1])] = 3
+            bounds = [0, 0.9,1.5, 2.5, 3.5]
+            norm = colors.BoundaryNorm(bounds, cmap.N)
+            space = axs[0, 0]
+            space.set_title(f'(a) Raw map')
+            space.imshow(temp, cmap=cmap, norm=norm)
+            space.grid(which='major', axis='both', linestyle='-', color='k', linewidth=1)
+            space.set_xticks(np.arange(0.5, temp.shape[1], 1)) 
+            space.set_yticks(np.arange(0.5, temp.shape[0], 1))
+            space.set_xticklabels([str(i) for i in range(temp.shape[1])])
+            space.set_yticklabels([str(i) for i in range(temp.shape[0])])
+            
+            axs[0, 1].set_title(f'(b) $U_{{att}}$')
+            sb.heatmap(U_att, ax=axs[0, 1])
+            axs[0, 2].set_title(f'(c) $U_{{rep}}$')
+            sb.heatmap(U_rep, ax=axs[0, 2])
+            axs[1, 0].set_title(f'(d) $U_{{str}}$')
+            sb.heatmap(U_str, ax=axs[1, 0])
+            axs[1, 1].set_title(f'(e) $U$')
+            sb.heatmap(U, ax=axs[1, 1])
+            axs[1, 2].set_title(f'(f) Observation')
+            sb.heatmap(self.curr_state, ax=axs[1, 2])
             plt.savefig('field.png')
-            plt.clf()
-            sb.heatmap(self.U_extended)
-            plt.savefig('field_extended.png')
         return 
     
     def step(self, action):
